@@ -1,0 +1,6 @@
+set -x
+export GOROOT=$HOME/goroot
+export PATH=$GOROOT/bin:/usr/local/git/current/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/go/bin
+go tool go2go translate cache.go2
+go run .
+

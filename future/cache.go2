@@ -1,0 +1,62 @@
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// TODO:
+// - make error result of f optional
+// - allow errors to suppress caching
+// - support cancellation, context, as optional parameters.
+
+// A future.Cache is a concurrency safe memoization of a function f such
+// that the value f(k) for each distinct key is computed at most once.
+//
+// TODO: if we used the generic hash map we could drop the 'comparable' constraint
+// and let the user specify it.
+type Cache[K comparable, V any] struct {
+	mu sync.Mutex
+	m  map[K]*future[V]
+	f  func(K) (V, error)
+}
+
+func New[K comparable, V any](f func(K) (V, error)) *Cache[K, V] {
+	return &Cache[K, V]{
+		m: make(map[K]*future[V]),
+		f: f,
+	}
+}
+
+type future[V any] struct {
+	done  chan struct{}
+	value V
+	err   error
+}
+
+func (c *Cache[K, V]) Get(k K) (V, error) {
+	c.mu.Lock()
+	f, ok := c.m[k]
+	if !ok {
+		// first request: compute it
+		f = &future[V]{done: make(chan struct{})}
+		c.m[k] = f
+		c.mu.Unlock()
+		f.value, f.err = c.f(k)
+		close(f.done)
+	} else {
+		// subsequent request: wait
+		c.mu.Unlock()
+		<- f.done
+	}
+	return f.value, f.err
+}
+
+func main() {
+	c := New[string,int](strlen)
+	fmt.Println(c.Get("hello"))
+	fmt.Println(c.Get("world"))
+}
+
+// TODO: make it so we don't need the error  result
+func strlen(s string) (int, error) { return len(s), nil }
