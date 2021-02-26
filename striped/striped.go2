@@ -1,0 +1,251 @@
+// A simple concurrency-safe striped map.
+//
+// There are no Len() nor Iterate() methods as these are poorly
+// defined or inefficient wrt concurrency, but they could easily be added.
+package main
+
+import (
+	"fmt"
+	"hash/fnv"
+	"io"
+	"runtime"
+	"strings"
+	"sync"
+	"math/bits"
+	"generics/hacks"
+)
+
+// A Map is concurrency-safe hash table using one striped locks (one per bucket).
+//
+// By default, it uses the same key hash function and equivalence relation
+// (KeyComp) as a standard map; consequently the key type must be comparable,
+// and panic results if hashing or equivalence fails dynamically.
+// Clients may override this behavior by specifying an alternative KeyComp.
+type Map[K, V any] struct {
+	buckets []bucket[K,V] // nonempty; len is power of 2
+	kcomp   KeyComp[K]
+}
+
+type KeyComp[K any] interface {
+	Hash(K) uintptr // TODO: add seed param
+	Equal(K, K) bool
+}
+
+type bucket[K, V any] struct {
+	mu      sync.Mutex
+	entries []entry[K, V]
+}
+
+type entry[K, V any] struct {
+	hash  uintptr
+	key   K
+	value V
+}
+
+// New returns a new, empty map using the standard key comparator.
+func New[K comparable, V any]() *Map[K, V] {
+	var std stdKeyComp[K]
+	return NewWithKeyComp[K, V](std)
+}
+
+// New returns a new, empty map using the specified key comparator.
+func NewWithKeyComp[K, V any](kcomp KeyComp[K]) *Map[K, V] {
+	// TODO: better estimate
+	nbuckets := int(clp2(uint64(runtime.GOMAXPROCS(-1)))) 
+	return &Map[K,V]{
+		kcomp:   kcomp,
+		buckets: make([]bucket[K,V], nbuckets),
+	}
+}
+
+// FromMap returns a new Map containing the given elements,
+// and the standard key comparator.
+func FromMap[K comparable, V any](elems map[K]V) *Map[K, V] {
+	m := New[K,V]() // TODO: use initial size
+	for k, v := range elems {
+		m.Insert(k, v)
+	}
+	return m
+}
+
+// Insert adds an entry to the map that associates the given key and value.
+// It returns the previously associated value, or the zero value if there was none.
+// Concurrency-safe.
+func (m *Map[K, V]) Insert(k K, v V) V {
+	hash, b := m.getBucket(k)
+	return b.insert(hash, k, v, m.kcomp)
+}	
+
+// Remove removes the map entry for a given key, and returns its associated value,
+// or the zero value if there was none. Concurrency-safe.
+func (m *Map[K, V]) Remove(k K) V {
+	hash, b := m.getBucket(k)
+	return b.remove(hash, k, m.kcomp)
+}
+
+// Clear removes all entries from the map in an unspecified order. Concurrency-safe.
+// Concurrency-safe.
+func (m *Map[K, V]) Clear() {
+	for _, b := range m.buckets {
+		b.clear()
+	}
+}
+
+// Get returns the value associated with key k, or the zero value if not found.
+// Concurrency-safe.
+// TODO: provide a "v, ok = m[k]" flavor too.
+func (m *Map[K, V]) Get(k K) V {
+	hash, b := m.getBucket(k)
+	return b.get(hash, k, m.kcomp)
+}
+
+// -- impl --
+
+func (b *bucket[K, V]) insert(hash uintptr, k K, v V, kcomp KeyComp[K]) (prev V) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.entries {
+		e := &b.entries[i]
+		if e.hash == hash && kcomp.Equal(e.key, k) {
+			prev = e.value
+			e.key = k
+			e.value = v
+			return
+		}
+	}
+	b.entries = append(b.entries, entry[K, V]{hash, k, v})
+	return
+}
+
+func (b *bucket[K, V]) remove(hash uintptr, k K, kcomp KeyComp[K]) (prev V) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.entries {
+		e := &b.entries[i]
+		if e.hash == hash && kcomp.Equal(e.key, k) {
+			prev = e.value
+			last := len(b.entries)-1
+			b.entries[i] = b.entries[last]
+			b.entries = b.entries[:last]
+			break
+		}
+	}
+	return
+}
+
+func (b *bucket[K, V]) get(hash uintptr, k K, kcomp KeyComp[K]) (v V) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.entries {
+		e := &b.entries[i]
+		if e.hash == hash && kcomp.Equal(e.key, k) {
+			v = e.value
+			break
+		}
+	}
+	return
+}
+
+func (b *bucket[K, V]) clear() {
+	b.mu.Lock()
+	for i := range b.entries {
+		b.entries[i] = entry[K, V]{} // aid GC
+	}
+	b.entries = b.entries[:0]
+	b.mu.Unlock()
+}
+	
+func (m *Map[K, V]) getBucket(k K) (hash uintptr, b *bucket[K, V]) {
+	// TODO: Seed properly. Flood protection. Don't discard top bits.
+	hash = m.kcomp.Hash(k)
+	return hash, &m.buckets[hash % uintptr(len(m.buckets))]
+}
+
+// A key comparator that uses the same relation as the standard map.
+// May panic.
+type stdKeyComp[K comparable] struct{}
+
+func (stdKeyComp[K]) Hash(k K) uintptr {
+	return hacks.RuntimeHash(k, /*seed=*/0) // may panic
+}
+
+func (stdKeyComp[K]) Equal(x, y K) bool {
+	return x == y // may panic
+}
+
+// clp2 returns x rounded up to a power of 2 ("ceiling power 2"). See HD 3-2.
+func clp2(x uint64) uint64 {
+	return (uint64(1)<<63) >> uint64(bits.LeadingZeros64(x-1)-1)
+}
+
+// -- test --
+
+func main() {
+ 	// int keys
+	m1 := New[int, int]()
+	fmt.Println(m1.Insert(1, 2)) // =0
+	fmt.Println(m1.Insert(2, 4)) // =0
+	fmt.Println(m1.Get(1)) // =2
+	fmt.Println(m1.Remove(1)) // =2
+	fmt.Println(m1.Remove(2)) // =4
+	fmt.Println(m1.Remove(2)) // =0
+
+ 	// string keys (wider than 1 word)
+	m2 := New[string, int]()
+	fmt.Println(m2.Insert("one", 1)) // =0
+	fmt.Println(m2.Insert("one", 2)) // =1
+	fmt.Println(m2.Get("one")) // =2
+	fmt.Println(m2.Remove("one")) // =2
+	fmt.Println(m2.Remove("one")) // =0
+
+ 	// string keys, case insensitive
+	m2a := NewWithKeyComp[string, int](stringCompNoCase{})
+	fmt.Println(m2a.Insert("one", 1)) // =0
+	fmt.Println(m2a.Insert("One", 2)) // =1
+	fmt.Println(m2a.Get("ONE")) // =2
+	fmt.Println(m2a.Remove("One")) // =2
+	fmt.Println(m2a.Remove("one")) // =0
+
+ 	// pointer keys
+	// type S struct{int} // a bug: this S must be defined outside 'main'
+	var a, b S
+	m3 := New[*S, string]()
+	fmt.Println(m3.Insert(&a, "a")) // =""
+	fmt.Println(m3.Insert(&b, "b")) // =""
+	fmt.Println(m3.Get(&a)) // ="a"
+	fmt.Println(m3.Get(&b)) // ="b"
+	fmt.Println(m3.Remove(&a)) // ="a"
+	fmt.Println(m3.Remove(&a)) // =""
+
+ 	// interface keys
+	m4 := New[interface{}, string]()
+	fmt.Println(m4.Insert(1, "1")) // =""
+	fmt.Println(m4.Insert("two", "2")) // =""
+	fmt.Println(m4.Insert(S{3}, "3")) // =""
+	fmt.Println(m4.Get(1)) // ="1"
+	fmt.Println(m4.Get("two")) // ="2"
+	fmt.Println(m4.Remove(1)) // ="1"
+	fmt.Println(m4.Remove("two")) // ="2"
+	fmt.Println(m4.Remove(S{3})) // ="3"
+
+	// dynamically unhashable
+	fmt.Println(m4.Remove(main)) // panic: runtime error: hash of unhashable type func()
+}
+
+type S struct{int}
+
+// A case insensitive comparator for string keys.
+type stringCompNoCase struct{}
+
+func (stringCompNoCase) Hash(x string) uintptr {
+	// Would be nice if the runtime's string hash were easily and efficiently
+	// accessible. (Maphash isn't there yet; see
+	// https://github.com/golang/go/issues/42710#issuecomment-763950234).
+	h := fnv.New64a()
+	io.WriteString(h, strings.ToLower(x))
+	return uintptr(h.Sum64())
+}
+
+func (stringCompNoCase) Equal(x, y string) bool {
+	return strings.ToLower(x)==strings.ToLower(y)
+}

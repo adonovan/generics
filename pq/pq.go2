@@ -1,0 +1,128 @@
+// This example demonstrates a generic priority queue.
+//
+// Alternative API choices:
+// - expose Item identity and provide a way to update its priority.
+package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+// A PriorityQueue is a set of elements, each with an integer priority,
+// with O(log N)-time operations for element insertion and minimum
+// element removal. The zero value is a valid, empty queue.
+type PriorityQueue[T any] struct {
+	items repr[T]
+}
+
+// FromMap returns a new priority queue whose initial elements
+// are the map keys, and whose priorities are the corresponding map values.
+func FromMap[T comparable](elems map[T]int) *PriorityQueue[T] {
+	pq := &PriorityQueue[T] {
+		items: make(repr[T], 0, len(elems)),
+	}
+	for value, priority := range elems {
+		pq.items = append(pq.items, &item[T]{value, priority})
+	}
+	heap.Init(&pq.items)
+	return pq
+}
+
+// FromSlice returns a new priority queue whose initial elements
+// are those of the slice, and whose priorities are the result of calling
+// priority(x) for each slice element.
+// TODO: some API is needed to add n initial elements in only O(n) time
+// but I'm not sure I like this one. Perhaps we should expose item?
+func FromSlice[T any](elems []T, priority func(T) int) *PriorityQueue[T] {
+	pq := &PriorityQueue[T] {
+		items: make(repr[T], 0, len(elems)),
+	}
+	for _, value := range elems {
+		pq.items = append(pq.items, &item[T]{value, priority(value)})
+	}
+	heap.Init(&pq.items)
+	return pq
+}
+
+// Add adds an item to the queue, with a given priority.
+func (pq *PriorityQueue[T]) Add(value T, priority int) {
+	it := &item[T]{value, priority}
+	heap.Push(&pq.items, it)
+}
+
+// Len returns the number of elements in the queue.
+func (pq *PriorityQueue[T]) Len() int { return pq.items.Len() }
+
+// Min returns the least element in the queue and its priority.
+// Precondition: Len() > 0.
+func (pq *PriorityQueue[T]) Min() (T, int) {
+    it := pq.items[0]
+    return it.value, it.priority
+}
+
+// TakeMin removes and returns the least element in the queue,
+// along with its priority.
+// Precondition: Len() > 0.
+func (pq *PriorityQueue[T]) TakeMin() (T, int) {
+	it := heap.Pop(&pq.items).(*item[T])
+	return it.value, it.priority
+}
+
+// -- impl --
+
+// repr implements heap.Interface.
+// Q. Is the poijnter indirection necessary? (avoids garbage alloc in pop)
+type repr[T any] []*item[T]
+
+type item[T any] struct {
+	value    T
+	priority int
+}
+
+func (pq repr[T]) Len() int { return len(pq) }
+
+func (pq repr[T]) Less(i, j int) bool {
+	return pq[i].priority < pq[j].priority
+}
+
+func (pq repr[T]) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+}
+
+func (pq *repr[T]) Push(x interface{}) {
+	*pq = append(*pq, x.(*item[T]))
+}
+
+func (pq *repr[T]) Pop() interface{} {
+	old := *pq
+	last := len(old)-1
+	it := old[last]
+	old[last] = nil
+	*pq = old[:last]
+	return it
+}
+
+// -- test --
+
+func main() {
+	// FromMap
+	pq := FromMap(map[string]int{"banana": 3, "apple": 2, "pear": 4})
+	pq.Add("orange", 1)
+	for pq.Len() > 0 {
+		v, pri := pq.TakeMin()
+		fmt.Println(pri, v)
+	}
+	fmt.Println()
+
+	// FromSlice
+	pq = FromSlice([]string{"apple", "banana", "orange"}, strlen)
+	pq.Add("pear", 4)
+	for pq.Len() > 0 {
+		v, pri := pq.TakeMin()
+		fmt.Println(pri, v)
+	}
+	fmt.Println()
+}
+
+func strlen(x string) int { return len(x) }
