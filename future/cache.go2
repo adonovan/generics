@@ -1,14 +1,16 @@
+// A generic concurrency-safe cache that memoizes a function.
 package main
 
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // TODO:
-// - make error result of f optional
-// - allow errors to suppress caching
-// - support cancellation, context, as optional parameters.
+// - make error result of f optional somehow.
+// - add option to suppress caching errors.
+// - support cancellation
 
 // A future.Cache is a concurrency safe memoization of a function f such
 // that the value f(k) for each distinct key is computed at most once.
@@ -21,6 +23,8 @@ type Cache[K comparable, V any] struct {
 	f  func(K) (V, error)
 }
 
+// New returns a new Cache that memoizes calls to f.
+// f must be concurrency safe.
 func New[K comparable, V any](f func(K) (V, error)) *Cache[K, V] {
 	return &Cache[K, V]{
 		m: make(map[K]*future[V]),
@@ -34,6 +38,7 @@ type future[V any] struct {
 	err   error
 }
 
+// Get returns the value of f(k).
 func (c *Cache[K, V]) Get(k K) (V, error) {
 	c.mu.Lock()
 	f, ok := c.m[k]
@@ -47,16 +52,27 @@ func (c *Cache[K, V]) Get(k K) (V, error) {
 	} else {
 		// subsequent request: wait
 		c.mu.Unlock()
-		<- f.done
+		<-f.done
 	}
 	return f.value, f.err
 }
 
 func main() {
-	c := New[string,int](strlen)
-	fmt.Println(c.Get("hello"))
-	fmt.Println(c.Get("world"))
+	t0 := time.Now()
+	done := make(chan struct{})
+	cache := New[string, int](slowStrlen)
+	go func() {
+		fmt.Println(cache.Get("hello"))
+		fmt.Println(cache.Get("world"))
+		close(done)
+	}()
+	fmt.Println(cache.Get("hello"))
+	fmt.Println(cache.Get("world"))
+	<-done
+	fmt.Println(time.Since(t0)) // about 2s (not 4)
 }
 
-// TODO: make it so we don't need the error  result
-func strlen(s string) (int, error) { return len(s), nil }
+func slowStrlen(s string) (int, error) {
+	time.Sleep(time.Second)
+	return len(s), nil
+}

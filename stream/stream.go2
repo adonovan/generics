@@ -1,0 +1,153 @@
+// Generic utilities for streams processing.
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// A stream is a function that retrieves and returns the next element in a sequence,
+// and whether that was successful.
+type Stream[T any] func() (T, bool)
+
+// MakeStream is a stream source that yields the specified elements.
+func MakeStream[T any](x ...T) Stream[T] {
+	s := sliceStream[T](x)
+	return s.next
+}
+
+// FibonacciStream is another stream source, this one infinite, that yields the Fibonacci sequence.
+func FibonacciStream() Stream[int] {
+	x, y := 0, 1
+	return func() (int, bool) {
+		x, y = y, x+y
+		return x, true
+	}
+}
+
+// PrintStream is a stream sink that prints each element.
+func PrintStream[T any](input Stream[T]) {
+	for {
+		x, ok := input()
+		if !ok {
+			break
+		}
+		fmt.Println(x)
+	}
+}
+
+// SumStream is another sink, that adds numbers (or concatenates strings).
+func SumStream[T addable](input Stream[T]) (sum T) {
+	for {
+		x, ok := input()
+		if !ok {
+			return
+		}
+		sum += x
+	}
+}
+
+type addable interface {
+	type int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, float32, float64, complex64, complex128, string
+}
+
+// Limit is a stream transformer that truncates the input at limit elements.
+func Limit[T any](input Stream[T], limit int) Stream[T] {
+	i := 0
+	return func() (_ T, ok bool) {
+		if i < limit {
+			i++
+			return input()
+		}
+		return
+	}
+}
+
+// Transform transforms a stream of X to an stream of Y.
+func Transform[X, Y any](input Stream[X], f func(X) Y) Stream[Y] {
+	return func() (y Y, ok bool) {
+		x, ok := input()
+		if ok {
+			y = f(x)
+		}
+		return
+	}
+}
+
+// ParallelTransform transforms a stream of X to an (unordered) stream of Y, in parallel,
+// as fast is it can read items from the input stream.
+// The function f is called concurrently.
+// The client must drain the result stream (see chanStream).
+//
+// TODO:
+// - cancellation
+// - concurrency limiting
+// - avoid goroutine leak from failure to drain result.
+// - buffer results so that they are reported in the original order?
+// The design space is huge (as is the potential for explosion of the generated code,
+// and for impenetrably abstract control flow).
+func ParallelTransform[X, Y any](input Stream[X], f func(X) Y) Stream[Y] {
+	ch := make(chan Y, 1)
+	var wg sync.WaitGroup
+	for {
+		x, ok := input()
+		if !ok {
+			break
+		}
+		wg.Add(1)
+		go func() {
+			ch <- f(x)
+			wg.Done()
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+	return ChanStream(ch)
+}
+
+// Closure for a stream over slice elements.
+type sliceStream[T any] []T
+
+func (it *sliceStream[T]) next() (elem T, ok bool) {
+	if len(*it) > 0 {
+		elem, *it, ok = (*it)[0], (*it)[1:], true
+	}
+	return
+}
+
+// Closure for an iterator over channels.
+// This is a bad design, because failure to drain the iterator
+// leads to a goroutine leak. But the types work.
+type chanStream[T any] <-chan T
+
+func (ch chanStream[T]) next() (x T, ok bool) { x, ok = <-ch; return }
+
+func ChanStream[T any](ch <-chan T) Stream[T] {
+	return chanStream[T](ch).next
+}
+
+// --test--
+
+func main() {
+	square := func(x int) int { return x * x }
+	PrintStream(ParallelTransform(MakeStream(1, 2, 3), square))            // prints 1, 4, 9 in some order
+	fmt.Println(SumStream(ParallelTransform(MakeStream(1, 2, 3), square))) // 14
+
+	// Prints 10ms, 20ms, 30ms in that order.
+	const ms = time.Millisecond
+	PrintStream(
+		ParallelTransform(
+			MakeStream(30*ms, 10*ms, 20*ms),
+			func(x time.Duration) time.Duration { time.Sleep(x); return x }))
+
+	// Prints "1 1 2 3 5"
+	fmt.Println(
+		SumStream(
+			Transform(
+				Limit(FibonacciStream(), 5),
+				func(x int) string { return fmt.Sprintf("%d ", x) })))
+
+}

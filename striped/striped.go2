@@ -1,4 +1,4 @@
-// A simple concurrency-safe striped map.
+// A concurrency-safe map using striped locks.
 //
 // There are no Len() nor Iterate() methods as these are poorly
 // defined or inefficient wrt concurrency, but they could easily be added.
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 	"math/bits"
-	"generics/hacks"
+	"github.com/adonovan/generics/hacks"
 )
 
 // A Map is concurrency-safe hash table using one striped locks (one per bucket).
@@ -99,6 +99,21 @@ func (m *Map[K, V]) Get(k K) V {
 	return b.get(hash, k, m.kcomp)
 }
 
+func (m *Map[K, V]) String() string {
+	var out strings.Builder
+	out.WriteString("{")
+	for _, b := range m.buckets {
+		b.foreach(func(k K, v V) {
+			if out.Len() > 1 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(&out, "%v: %v", k, v)
+		})
+	}
+	out.WriteString("}")
+	return out.String()
+}
+
 // -- impl --
 
 func (b *bucket[K, V]) insert(hash uintptr, k K, v V, kcomp KeyComp[K]) (prev V) {
@@ -154,6 +169,14 @@ func (b *bucket[K, V]) clear() {
 	b.entries = b.entries[:0]
 	b.mu.Unlock()
 }
+
+func (b *bucket[K, V]) foreach(f func(k K, v V)) {
+	b.mu.Lock()
+	for _, e := range b.entries {
+		f(e.key, e.value)
+	}
+	b.mu.Unlock()
+}
 	
 func (m *Map[K, V]) getBucket(k K) (hash uintptr, b *bucket[K, V]) {
 	// TODO: Seed properly. Flood protection. Don't discard top bits.
@@ -161,8 +184,7 @@ func (m *Map[K, V]) getBucket(k K) (hash uintptr, b *bucket[K, V]) {
 	return hash, &m.buckets[hash % uintptr(len(m.buckets))]
 }
 
-// A key comparator that uses the same relation as the standard map.
-// May panic.
+// A key comparator that uses the same relation as the standard map. May panic.
 type stdKeyComp[K comparable] struct{}
 
 func (stdKeyComp[K]) Hash(k K) uintptr {
@@ -227,6 +249,14 @@ func main() {
 	fmt.Println(m4.Remove(1)) // ="1"
 	fmt.Println(m4.Remove("two")) // ="2"
 	fmt.Println(m4.Remove(S{3})) // ="3"
+	
+	// slice keys (but don't mutate them)
+	m5 := NewWithKeyComp[[]string, int](sliceComp[string]{})
+	m5.Insert(strings.Fields("hello, world"), 1)
+	m5.Insert(strings.Fields("a b c"), 2)
+	m5.Insert([]string{}, 3)
+	m5.Insert(nil, 4)
+	fmt.Println(m5) // {[]: 4, [a b c]: 2, [hello, world]: 1}
 
 	// dynamically unhashable
 	fmt.Println(m4.Remove(main)) // panic: runtime error: hash of unhashable type func()
@@ -248,4 +278,28 @@ func (stringCompNoCase) Hash(x string) uintptr {
 
 func (stringCompNoCase) Equal(x, y string) bool {
 	return strings.ToLower(x)==strings.ToLower(y)
+}
+
+// A comparator for slices of comparable element type T.
+// May panic on elements that are not dynamically hashable/comparable.
+type sliceComp[T comparable] struct{}
+
+func (sliceComp[T]) Hash(slice []T) uintptr {
+	var hash uintptr
+	for _, elem := range slice {
+		hash = hash * 7 + stdKeyComp[T]{}.Hash(elem)
+	}
+	return hash
+}
+
+func (sliceComp[T]) Equal(x, y []T) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }

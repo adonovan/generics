@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// A Metric is essentially a function. Parameterization over argument lists is not easily done
-// in any generic type system.
+// A Metric is essentially a function. Parameterization over variable numbers of arguments
+// is not easily done in any generic type system.
 
 // I expect this design with cause a lot of code expansion,
 // as does the template-heavy C++ implementation of streamz used at Google,
@@ -25,7 +25,6 @@ import (
 // - a protocol message (for more complex scenarios)
 //
 // TODO: locking
-// TODO: store the timestamp of most recent call to Set alongside the value.
 //
 // This interface allows the monitoring service (not shown) to read all the process's
 // registered metrics (registration also not shown) during a monitoring request.
@@ -126,7 +125,7 @@ type counterScalarMetric struct {
 
 func (m *counterScalarMetric) Increment(_ K0) { m.v++ }
 
-// TODO: callbackMetric
+// TODO: implement a callback-defined metric.
 
 // --test--
 
@@ -143,6 +142,7 @@ func main() {
 	// Nonetheless, we still get confusing compiler errors of the form:
 	// "m.scalarMetric undefined (type *counterScalarMetric has no field or method scalarMetric)"
 	// reported in the wrong place.
+	// See https://github.com/golang/go/issues/44688
 	
 	k := hostport{"localhost", 80}
 	connections.mapMetric.Set(k, connections.mapMetric.Get(k) + 1)  // compile errors: see 'oddities' package

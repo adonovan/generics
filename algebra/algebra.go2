@@ -1,0 +1,72 @@
+package main
+
+import (
+	"fmt"
+	"math/big"
+)
+
+// Algebra is a set of traits that define an algebraic ring.
+// It may be defined for various kinds of number, for example.
+type Algebra[N any] interface {
+	Add(N, N) N
+	Sub(N, N) N
+	Mul(N, N) N
+	Div(N, N) N
+}
+
+// sqrt is a generic square root algorithm using Newton's method.
+// The generated code is efficient and specialized.
+func sqrt[N any, A Algebra[N]](a N) N {
+	var alg A // trivial instantiation: Algebra is traits, not state
+	x := a
+	// TODO: stop when f_ is smaller than some algebra-defined epsilon.
+	for i := 0; i < 10; i++ {
+		f := alg.Sub(alg.Mul(x, x), a)
+		f_ := alg.Add(x, x)
+		x = alg.Sub(x, alg.Div(f, f_))
+	}
+	return x
+}
+
+type float struct{}
+
+var _ Algebra[float64] = float{}
+
+func (float) Add(x, y float64) float64 { return x + y }
+func (float) Sub(x, y float64) float64 { return x - y }
+func (float) Mul(x, y float64) float64 { return x * y }
+func (float) Div(x, y float64) float64 { return x / y }
+
+type rational struct{}
+
+var _ Algebra[*big.Rat] = rational{}
+
+func (rational) Add(x, y *big.Rat) *big.Rat { return new(big.Rat).Add(x, y) }
+func (rational) Sub(x, y *big.Rat) *big.Rat { return new(big.Rat).Sub(x, y) }
+func (rational) Mul(x, y *big.Rat) *big.Rat { return new(big.Rat).Mul(x, y) }
+func (rational) Div(x, y *big.Rat) *big.Rat { return new(big.Rat).Mul(x, new(big.Rat).Inv(y)) }
+
+// This is currently the same as float,
+// but would diverge as we add operators.
+type complex struct{}
+
+var _ Algebra[complex128] = complex{}
+
+func (complex) Add(x, y complex128) complex128 { return x + y }
+func (complex) Sub(x, y complex128) complex128 { return x - y }
+func (complex) Mul(x, y complex128) complex128 { return x * y }
+func (complex) Div(x, y complex128) complex128 { return x / y }
+
+func main() {
+	// Observation: unless we define Sqrt{Float,Rat,Complex} wrappers,
+	// the need to specify both the numeric type and its algebra is clumsy.
+
+	// Prints: 1.1111111060555556
+	fmt.Println(sqrt[float64, float](1.23456789))
+
+	// Prints: 1.11111110605555554405416661433535
+	fmt.Println(sqrt[*big.Rat, rational](big.NewRat(123456789, 1e8)).FloatString(32))
+
+	// Prints: (1.1111111060555556+0i)
+	fmt.Println(sqrt[complex128, complex](1.23456789))
+}
