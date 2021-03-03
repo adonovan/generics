@@ -106,7 +106,7 @@ func (pq *repr[T]) Pop() interface{} {
 // -- test --
 
 func main() {
-	// FromMap
+	// FromMap: initial elements and priorities supplied by map.
 	pq := FromMap(map[string]int{"banana": 3, "apple": 2, "pear": 4})
 	pq.Add("orange", 1)
 	for pq.Len() > 0 {
@@ -114,8 +114,13 @@ func main() {
 		fmt.Println(pri, v)
 	}
 	fmt.Println()
+	// Output:
+	// 1 orange
+	// 2 apple
+	// 3 banana
+	// 4 pear
 
-	// FromSlice
+	// FromSlice: initial elements supplied from slice, priorities from a function.
 	pq = FromSlice([]string{"apple", "banana", "orange"}, strlen)
 	pq.Add("pear", 4)
 	for pq.Len() > 0 {
@@ -123,6 +128,11 @@ func main() {
 		fmt.Println(pri, v)
 	}
 	fmt.Println()
+	// Output:
+	// 4 pear
+	// 5 apple
+	// 6 orange
+	// 6 banana
 }
 
 func strlen(x string) int { return len(x) }

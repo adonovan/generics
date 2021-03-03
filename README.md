@@ -15,11 +15,14 @@ Quick experiments with Go generics
 
 First impression:
 
-This is really nice. It addresses the main things I miss about generics:
+This is really nice. It addresses the main things I miss about generics, namely
+
 - being able to change the equivalence relation of map;
-- a better API for a priority queue;
-- and the ability to generate specialized code for a range of data types
-  (though I understand that's not guaranteed).
+- better APIs for data structures like trees, graphs, and priority queues; and
+- the ability to generate efficient specialized code for a range of data types
+  (though I understand that's not guaranteed);
+
+and does so without overwhelming complexity.
 
 By comparison, C++'s templates are extremely powerful, but syntactically and
 semantically quite complex, and historically the error messages have
@@ -33,8 +36,7 @@ feeling simple and easy to use.
 Observations:
 
 - Slices can now be implemented in the language, but not without `unsafe` pointer arithmetic.
-  The generic slice algorithms work nicely.
-  Sorting with a custom order works nicely.
+  The generic slice algorithms work nicely. So does sorting with a custom order.
 
 - `unsafe.Sizeof` is disallowed on type parameters, yet it can be simulated using pointer arithmetic
   (though not as a constant expression). Why?
@@ -59,10 +61,16 @@ Observations:
   function by cases specialized to each possible type. For example, I don't know
   how to write a generic version of all the math/bits.OnesCount functions that uses
   the most efficient implementation.
-  (Typeswitch doesn't handle all possible named types, and using reflect is cheating.)
+  (Typeswitch doesn't handle named variants of built-in types; and using reflect is cheating.)
+
+- In practice I suspect concurrent loop abstractions will nearly always want additional
+  parameters such as: a limit on parallelism; a context; cancellation; control over
+  errors (e.g. ignore, choose first, choose arbitrarily, or combine all).
 
 Users will no doubt build generic libraries of collections, of stream processing functions,
 and of numeric analysis routines. The design space for each is large, and I imagine arriving
 at simple, efficient, and coherent APIs worthy of the standard library will be an arduous task.
 But there is no need to hurry.
 
+My experiments have tended to parameterize over built-in types, or "any".
+I should probably spend more time investigating interface-constrained types.

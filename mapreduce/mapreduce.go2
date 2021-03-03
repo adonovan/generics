@@ -1,4 +1,4 @@
-// Generic utilities for parallel map/reduce and other function program staples.
+// Generic utilities for parallel map/reduce and other functional-programming staples.
 package main
 
 import (
@@ -35,7 +35,7 @@ func Map[A, B any](elems []A, f func(A) B) []B {
 }
 
 // Reduce computes, in parallel, the reduction of a non-empty slice
-// using the binary operator f, which must be a monoid.
+// using the binary operator f, which must be a monoid (e.g. +).
 // f may be called concurrently.
 func Reduce[T any](elems []T, f func(T, T) T) T {
 	switch n := len(elems); n {
