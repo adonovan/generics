@@ -4,3 +4,4 @@ export PATH=$GOROOT/bin:/usr/local/git/current/bin:/usr/local/bin:/usr/bin:/bin:
 go tool go2go translate slices.go2
 go run .
 
+

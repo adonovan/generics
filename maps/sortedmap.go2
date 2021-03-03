@@ -1,0 +1,91 @@
+// A map data structure with sorted keys. See also striped.Map.
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// TODO: pass in the order relation
+type ordered interface {
+	type int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		string
+}
+
+type Map[K ordered, V any] struct {root *node[K,V] }
+
+func New[K ordered, V any]() *Map[K, V] { return new(Map[K, V]) }
+
+func (m *Map[K, V]) Put(k K, v V) { put(&m.root, k, v) }
+
+func (m *Map[K, V]) Get(k K) V { return m.root.get(k) }
+
+func (m *Map[K, V]) Keys() []K { return m.root.appendKeys(nil) }
+
+func (m *Map[K, V]) String() string {
+	var buf strings.Builder
+	buf.WriteString("{")
+	for i, k := range m.Keys() {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		fmt.Fprintf(&buf, "%v: %v", k, m.Get(k))
+	}
+	buf.WriteString("}")
+	return buf.String()
+}
+
+
+// -- impl --
+
+// Trivial unbalanced binary tree.
+type node[K ordered, V any] struct { left, right *node[K, V]; k K; v V }
+
+func put[K ordered, V any](naddr **node[K, V], k K, v V) {
+	if *naddr == nil {
+		*naddr = &node[K, V]{k: k, v: v}
+		return
+	}
+	n := *naddr
+	if k < n.k {
+		put(&n.left, k, v)
+	} else if k > n.k {
+		put(&n.right, k, v)
+	} else {
+		n.v = v
+	}
+}
+
+func (n *node[K, V]) get(k K) (_ V) {
+	if n == nil {
+		return // nope
+	}
+	if k < n.k {
+		return n.left.get(k)
+	} else if k > n.k {
+		return n.right.get(k)
+	} else {
+		return n.v
+	}
+}
+
+func (n *node[K, V]) appendKeys(out []K) []K {
+	if n != nil {
+		out = n.left.appendKeys(out)
+		out = append(out, n.k)
+		out = n.right.appendKeys(out)
+	}
+	return out
+}
+
+func main() {
+	var m Map[string, int]
+	m.Put("two", -2)
+	m.Put("three", 3)
+	m.Put("two", 2)
+	m.Put("one", 1)
+	fmt.Println(&m) // {one: 1, three: 3, two: 2}
+}
+

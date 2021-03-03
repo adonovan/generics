@@ -1,0 +1,8 @@
+set -x
+export GOROOT=$HOME/goroot
+export PATH=$GOROOT/bin:$PATH
+go tool go2go translate *.go2
+# go tool compile -S number.go
+go run .
+
+

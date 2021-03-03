@@ -1,0 +1,56 @@
+// Oddities, corner cases, and some bugs.
+package main
+
+import "fmt"
+
+
+// -- struct embedding of type variable --
+
+type S[T any] struct { T; X int } // "anonymous" field has name T in every instantation
+
+func _() {
+     var s S[X]
+     s.f() // X.f method promoted via S.X embedded field
+     fmt.Printf("%T %T", s.T, s.X) // "main.X", "int"
+}
+
+type X string
+func (X) f() {}
+
+
+// -- compiler bug: struct embedding of A[T] doesn't work  --
+
+type A[T any] struct{}
+func (*A[T]) f(T) {}
+
+type B[T any] struct { A[T] }
+
+func _() {
+	var b B[string]
+	b.A.f("") // ok
+//	b.f("") // compile error: type *B[string] of b does not match *A[K] (cannot infer K)
+}
+
+// -- another compiler bug in struct embedding --
+
+type P[V any] struct {v V}
+type Q struct { P[int64] }
+func _(q *Q) {
+     _ = q.P // ok
+     _ = q.P.v // ok
+     _ = q.v // compile error: q.P undefined (type *Q has no field or method P)
+}
+
+
+// -- int literals must be valid for all types --
+
+type integer interface { type int8, int }
+
+func add128[T integer](x T) {
+     // x = 128 // error: 128 exceeds int8
+}
+
+
+//--
+
+func main() {}

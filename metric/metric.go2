@@ -1,0 +1,166 @@
+// Metrics, in the manner of Google's monarch/streamz, which inspired prometheus.io.
+package main
+
+import (
+	"fmt"
+)
+
+// A Metric is essentially a function. Parameterization over argument lists is not easily done
+// in any generic type system.
+
+// I expect this design with cause a lot of code expansion,
+// as does the template-heavy C++ implementation of streamz used at Google,
+// which accounts for a significant chunk of the code size of large C++ binaries.
+// (I have always wondered whether that design was a mistake. Sorry about that.)
+
+// A Metric is a time-varying function of type V, whose argument is a key of type K,
+// which is a struct whose elements are each constrained to be a Field (int64, string, or bool).
+// (Algebraically, Field^n).
+// Metrics may be represented as a map of variables that is updated by the process,
+// or lazily, in terms of a callback function for each map cell.
+//
+// What about constraints on V? Usually it must be one of
+// - a counter (int64)
+// - a continuous random variable (float64)
+// - a protocol message (for more complex scenarios)
+//
+// TODO: locking
+// TODO: store the timestamp of most recent call to Set alongside the value.
+//
+// This interface allows the monitoring service (not shown) to read all the process's
+// registered metrics (registration also not shown) during a monitoring request.
+//
+// (A better API would expose all the concrete types to the user using custom
+// signatures such as Get() for a scalar, or Get(K1, K2) for a 2-field map, and use the
+// generic abstraction over types only in the internal communication with the registration
+// and monitoring code.)
+type Metric[K comparable, V any] interface {
+	Get(K) V
+	Set(K, V)
+        enumerate() []Pair[K, V] // called by monitoring system to enumerate k/v pairs
+}
+
+// Specialization for when V=int64, revealing atomic Increment method.
+// This interface is intended for users, not the monitoring system.
+type CounterMetric[K comparable] interface {
+	// Metric[K, int64] // FIXME for some reason this is a parse error.
+	// Write out base interface in full:
+        enumerate() []Pair[K, int64] 
+	Get(K) int64
+	Set(K, int64)
+	
+	Increment(K)
+}
+
+type Pair[X, Y any] struct {X X; Y Y}
+
+// A Field is one component of a key. (Prometheus calls them "metric labels").
+type Field interface {
+	type int64, bool, string;
+}
+
+type K0 struct{}
+type K1[T1 Field] struct{F1 T1}
+type K2[T1, T2 Field] struct{F1 T1; F2 T2}
+type K3[T1, T2, T3 Field] struct{F1 T1; F2 T2; F3 T3}
+type K4[T1, T2, T3, T4 Field] struct{F1 T1; F2 T2; F3 T3; F4 T4} // enough already?
+
+// -- mapMetric --
+
+// A metric defined in terms of a map.
+type mapMetric[K comparable, V any] struct {
+	m  map[K]V
+}
+
+func (m *mapMetric[K, V]) enumerate() []Pair[K, V] {
+	// Assertions of interface satisfaction must now live
+	// inside the scope of a type parameter, not at top level.
+	var _ Metric[K, V] = m
+
+	res := make([]Pair[K, V], len(m.m))
+	for k, v := range m.m {
+		res = append(res, Pair[K, V]{k, v})
+	}
+	return res	
+}
+
+func (m *mapMetric[K, V]) Get(k K) V {
+	if m.m == nil {
+		m.m = make(map[K]V)
+	}
+	return m.m[k]
+}
+
+func (m *mapMetric[K, V]) Set(k K, v V) { m.m[k] = v }
+
+// counterMapMetric is a specialization for V=int64, and has an atomic Increment method.
+type counterMapMetric[K comparable] struct {
+	mapMetric[K, int64] // FIXME embedding doesn't work
+}
+	
+func (m *counterMapMetric[K]) Increment(k K) { m.m[k]++ }
+
+// --scalarMetric--
+
+// A metric with a single variable, and no key.
+type scalarMetric[V any] struct {
+	v V
+}
+
+func (m *scalarMetric[V]) enumerate() []Pair[K0, V] {
+	// Assertions of interface satisfaction must now live
+	// inside the scope of a type parameter, not at top level.
+	var _ Metric[K0, V] = m
+
+	return []Pair[K0, V]{{Y: m.v}}
+}
+
+func (m *scalarMetric[V]) Get(_ K0) V { return m.v }
+
+func (m *scalarMetric[V]) Set(_ K0, v V) { m.v = v }
+
+// counterScalarMetric is a specialization for V=int64, and has an atomic Increment method.
+type counterScalarMetric struct {
+	scalarMetric[int64] // FIXME embedding doesn't work
+}
+
+func (m *counterScalarMetric) Increment(_ K0) { m.v++ }
+
+// TODO: callbackMetric
+
+// --test--
+
+type hostport K2[string, int64]
+
+func main() {
+	fmt.Println()
+	// An example metric that counts connections.
+	// type hostport K2[string, int64] // go2go doesn't allow locally defined types
+	var connections counterMapMetric[hostport]
+
+	// FIXME all of the .mapMetric operations below should not be required,
+	// but appear to work around a compiler bug.
+	// Nonetheless, we still get confusing compiler errors of the form:
+	// "m.scalarMetric undefined (type *counterScalarMetric has no field or method scalarMetric)"
+	// reported in the wrong place.
+	
+	k := hostport{"localhost", 80}
+	connections.mapMetric.Set(k, connections.mapMetric.Get(k) + 1)  // compile errors: see 'oddities' package
+	connections.Increment(k)
+	
+	k = hostport{"github.com", 443}
+	connections.mapMetric.Set(k, connections.mapMetric.Get(k) + 1) 
+	connections.Increment(k)
+	
+	for _, e := range connections.mapMetric.enumerate() {
+		fmt.Println(e)
+	}
+	
+	var counter counterScalarMetric
+	counter.Increment(K0{})
+	counter.Increment(K0{})
+	counter.Increment(K0{})
+	for _, e :=  range counter.scalarMetric.enumerate() {
+		fmt.Println(e)
+	}
+}

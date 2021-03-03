@@ -3,12 +3,10 @@ package main
 
 import (
 	"fmt"
+	"math/big"
+	"sort"
 	"unsafe"
 )
-
-// TODO: sort, uniq, filter, etc
-
-// TODO: q. is the GC ok with all the unsafe hacks?
 
 // A user-defined slice type, to demonstrate that the runtime slice type can now
 // be implemented within the language.
@@ -52,7 +50,8 @@ func (s Slice[T]) Append(elems...T) Slice[T] {
 func (s Slice[T]) AppendSlice(t Slice[T]) Slice[T] { return s.Append(s.ToSlice()...) }
 func (s Slice[T]) ToSlice() []T { return toRuntime(s) }
 func (s Slice[T]) String() string { return fmt.Sprint(s.ToSlice()) }
-// Equivalent to s[i:j].
+
+// s[i:j]
 func (s Slice[T]) Slice(i, j int) Slice[T] {
 	if 0 <= i && i <= j && j <= s.len {
 		s.len = j - i
@@ -62,7 +61,8 @@ func (s Slice[T]) Slice(i, j int) Slice[T] {
 	}
 	panic("indices out of range")
 }
-// Equivalent to s[::cap].
+
+// s[::cap]
 func (s Slice[T]) WithCap(cap int) Slice[T] {
 	if cap < s.len {
 		panic("invalid cap index")
@@ -78,8 +78,10 @@ func offset[T any](data *T, index int) *T {
 	return (*T)(uP(uintptr(uP(data)) + sizeof[T]() * uintptr(index)))
 }
 
-// Why does unsafe.Sizeof(T) not work, when we can implement it in the language thus?
+// sizeof returns the address difference between adjacent []T array elements.
+// (Why does unsafe.Sizeof(T) not work, when we can implement it in the language?)
 func sizeof[T any]() uintptr {
+	// The compiler generates very poor code for this function.
 	var array [2]T
 	return uintptr(uP(&array[1])) - uintptr(uP(&array[0]))
 }
@@ -100,6 +102,63 @@ func max(x, y int) int {
 	} else {
 		return y
 	}
+}
+
+// ------------------------------------------------------------------------
+
+// Generic algorithms over runtime slices.
+
+type integer interface {
+	type int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr;
+}
+
+// SortInts sorts the slice of integers using its natural order.
+// (No need for strings, as sort.Strings exists.)
+// (No need for floats, as they are not a strict weak order.)
+func SortInts[T integer](x []T) {
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}
+
+// Sort sorts a slice using the given strict weak order.
+func Sort[T any](slice []T, less func(x, y T) bool) {
+	sort.Slice(slice, func(i, j int) bool { return less(slice[i], slice[j]) })
+}
+
+// Uniq combines adjacent elements that are equal, in place.
+// Don't forget to use the result!
+func Uniq[T comparable](in []T) []T {
+	out := in[:0]
+	for _, x := range in {
+		if len(out) > 0 && x == out[len(out)-1] {
+			continue // duplicate
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
+// Filter discards elements for which !keep(x), in place.
+// Don't forget to use the result!
+func Filter[T any](in []T, keep func(x T) bool) []T {
+	out := in[:0]
+	for _, x := range in {
+		if keep(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+type Pair[X, Y any] struct {X X; Y Y}
+
+// Zip produces the x-major cross product of two slices.
+func Zip[X, Y any](xx []X, yy []Y) (res []Pair[X, Y]) {
+	for _, x := range xx {
+		for _, y := range yy {
+			res = append(res, Pair[X, Y]{x, y})
+		}
+	}
+	return
 }
 
 // --test--
@@ -123,5 +182,34 @@ func main() {
 		}
 	}
 	fmt.Println(out) // [hello goodbye]
+
+	// ------------
+
+	// Uniq, Filter
+	a := []string{"one", "two", "three", "two"}
+	sort.Strings(a)
+	a = Uniq(a)
+	a = Filter(a, func(x string) bool { return x[0] == 't' })
+	fmt.Println(a) // ["three two"]
+
+	// SortInts
+	b := []uint16{9, 3, 7, 0, 7}
+	SortInts(b)
+	fmt.Println(b) // [0 3 7 7 9]
+
+	// Sort slice of pointers using custom order.
+	c := []*big.Int{bigInt(9), bigInt(3), bigInt(7), bigInt(0), bigInt(7)}
+	Sort(c, bigIntLess)
+	fmt.Println(c) // [0 3 7 7 9]
+
+	// Zip
+	d := Zip(a, b)
+	fmt.Println(d) // {three 0} {three 3} {three 7} {three 7} {three 9} {two 0} {two 3} {two 7} {two 7} {two 9}]
 }
+
+// bigInt returns a bigint (a value whose standard hash/eq/< relations are not the logical ones).
+func bigInt(x int64) *big.Int { return new(big.Int).SetInt64(x) }
+
+func bigIntLess(x, y *big.Int) bool { return x.Cmp(y) < 0; }
+
 
