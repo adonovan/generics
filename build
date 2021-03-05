@@ -1,0 +1,8 @@
+# Emacs: use 'M-x compile ../build' from within any .go2 file.
+
+set -eux
+export GOROOT=$HOME/goroot PATH=$GOROOT/bin:$PATH
+go tool go2go translate *.go2
+# go tool compile -S *.go
+go run .
+
