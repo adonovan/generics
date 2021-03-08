@@ -50,6 +50,11 @@ func add128[T integer](x T) {
      // x = 128 // error: 128 exceeds int8
 }
 
+// -- unbounded recursion in types --
+
+func f[T any]() { f[[]T]() }
+
+func g() { f[int]() } // compile error: looping while expanding f[[]...[]int]()
 
 //--
 
