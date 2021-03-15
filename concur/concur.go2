@@ -1,0 +1,62 @@
+// Package concur provides various concurrency utilities.
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// The APIs below all potentially encourange goroutine leaks.
+// The inability to parameterize over a function's result type (e.g. T vs. (X, Y) vs (T, error))
+// suggests that these utilities might be needed in many variants.
+// If the called function needs a context, presumably f would have to close over it.
+
+// CallWithCancel returns the result of calling f(), or an error if the context is cancelled.
+// Even upon cancellation, the call to f always runs to completion.
+func CallWithCancel[T any](ctx context.Context, f func() (T, error)) (T, error) {
+	return CallUntilDone(ctx.Done(), f)
+}
+
+// CallWithTimeout is a variant of CallUntilDone that takes a duration.
+func CallWithTimeout[T any](timeout time.Duration, f func() (T, error)) (T, error) {
+   return CallUntilDone(time.After(timeout), f)
+}
+
+// CallUntilDone is a variant of CallWithCancel that takes a done channel.
+// Returns context.DeadlineExceeded if done channel is closed before call returns.x
+func CallUntilDone[T, U any](done <- chan U, f func() (T, error)) (T, error) {
+    type result struct { T; error }
+    ch := make(chan result, 1)
+    go func() {
+        var res result
+        res.T, res.error = f()
+        ch <- res
+    }()
+    select {
+    case res := <- ch:
+        return res.T, res.error
+    case <-done:
+        return *new(T), context.DeadlineExceeded
+    }
+}
+
+// -- test --
+
+func main() {
+	ctx2, _ := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	x, err := CallWithCancel[int] (ctx2, func() (int, error) { return slowAdd(1, 2), nil })
+	fmt.Println(x, err)
+
+	ctx2, _ = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	x, err = CallUntilDone[int, struct{}] (ctx2.Done(), func() (int, error) { return slowAdd(1, 2), nil })
+	fmt.Println(x, err)
+
+	x, err = CallWithTimeout[int] (100*time.Millisecond, func() (int, error) { return slowAdd(1, 2), nil })
+	fmt.Println(x, err)
+}
+
+func slowAdd(x, y int) int {
+	time.Sleep(1 * time.Second)
+	return x + y
+}
