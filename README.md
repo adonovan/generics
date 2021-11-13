@@ -1,7 +1,7 @@
 # generics
 Quick experiments with Go generics
 
-- `algebra`, a generic square root function for float, complex and and rational.
+- `algebra`, a generic square root function for float, complex and rational.
 - `concur`, various concurrency utilities.
 - `future`, a concurrent cache ("future cache"). 
 - `mapreduce`, parallel Map, Reduce, and ForEach utilities
